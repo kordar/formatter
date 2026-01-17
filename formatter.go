@@ -9,6 +9,7 @@ var container = map[string]Formatter{}
 
 func init() {
 	Register(StrFormatter{})
+	Register(StrToArrFormatter{})
 	Register(IntFormatter{})
 	Register(LongFormatter{})
 	Register(TimeFormatter{})
@@ -44,18 +45,6 @@ func Format(name string, value interface{}, param map[string]interface{}, args .
 		return nil
 	}
 	return f.Format(value, param, args...)
-}
-
-// StrFormatter 转换str
-type StrFormatter struct {
-}
-
-func (s StrFormatter) Name() string {
-	return "str"
-}
-
-func (s StrFormatter) Format(value interface{}, param map[string]interface{}, args ...string) interface{} {
-	return cast.ToString(value)
 }
 
 // IntFormatter 转int

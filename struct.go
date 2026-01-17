@@ -4,113 +4,155 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 )
 
-var cached = map[string][]fieldCache{}
+// 缓存结构体字段信息
+var (
+	cached   = make(map[string][]fieldCache)
+	cacheMux sync.RWMutex
+)
 
 type fieldCache struct {
-	Name      string
-	FieldName string
-	FieldType string
-	Index     int
+	Name      string // json 名称或字段名
+	FieldName string // 结构体字段名
+	FieldType string // 字段类型
+	Index     int    // 字段索引
 	Func      funcParam
 }
 
 type funcParam struct {
-	Type string
-	Args []string
+	Type string   // 格式化器类型
+	Args []string // 格式化器参数
 }
 
+// 解析 formatter 标签，例如 "number:2,3"
 func parseFormatterTag(value string, fieldType string) funcParam {
 	if value == "" {
 		return funcParam{Type: fieldType, Args: []string{}}
 	}
-	item := strings.Split(value, ":")
+	item := strings.SplitN(value, ":", 2)
 	param := funcParam{Type: item[0], Args: []string{}}
 	if len(item) == 2 {
-		args := strings.Split(item[1], ",")
-		param.Args = append(param.Args, args...)
+		param.Args = strings.Split(item[1], ",")
 	}
 	return param
 }
 
+// 获取结构体字段缓存
 func getCached(v interface{}) []fieldCache {
 	t := reflect.TypeOf(v)
-	p := t.PkgPath()
-	key := fmt.Sprintf("%s.%s", p, t.Name())
-	if cached[key] != nil {
-		return cached[key]
+	if t == nil {
+		return nil
 	}
 
+	// 获取实际类型，如果是指针则取 Elem
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
-	m := make([]fieldCache, 0, t.NumField())
-	// 遍历结构体字段
+	if t.Kind() != reflect.Struct {
+		return nil
+	}
+
+	key := fmt.Sprintf("%s.%s", t.PkgPath(), t.Name())
+
+	// 使用读写锁保护缓存
+	cacheMux.RLock()
+	if fc, ok := cached[key]; ok {
+		cacheMux.RUnlock()
+		return fc
+	}
+	cacheMux.RUnlock()
+
+	fields := make([]fieldCache, 0, t.NumField())
 	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)     // 获取第 i 个字段
-		fieldName := field.Name // 字段名
+		field := t.Field(i)
+
+		// 忽略私有字段和 json:"-"
+		if field.PkgPath != "" {
+			continue
+		}
 		jsonTag := field.Tag.Get("json")
 		if jsonTag == "-" {
 			continue
 		}
-		name := fieldName
+		name := field.Name
 		if jsonTag != "" {
-			name = jsonTag
+			name = strings.Split(jsonTag, ",")[0]
 		}
-		// 获取字段标签
+
 		tag := field.Tag.Get("formatter")
 		f := parseFormatterTag(tag, field.Type.Name())
-		mm := fieldCache{
+
+		fields = append(fields, fieldCache{
 			Name:      name,
-			Func:      f,
-			FieldName: fieldName,
+			FieldName: field.Name,
 			FieldType: field.Type.Name(),
 			Index:     i,
-		}
-		m = append(m, mm)
+			Func:      f,
+		})
 	}
-	return m
+
+	cacheMux.Lock()
+	cached[key] = fields
+	cacheMux.Unlock()
+
+	return fields
 }
 
+// 将切片转为 []map[string]interface{}
 func ToDataList(v interface{}, params map[string]interface{}) []map[string]interface{} {
 	if v == nil {
 		return nil
 	}
 	if params == nil {
-		params = map[string]interface{}{}
+		params = make(map[string]interface{})
 	}
-	// 获取传入切片的值
+
 	slice := reflect.ValueOf(v)
 	if slice.Kind() == reflect.Ptr {
 		slice = slice.Elem()
 	}
+	if slice.Kind() != reflect.Slice && slice.Kind() != reflect.Array {
+		return nil
+	}
+
 	data := make([]map[string]interface{}, 0, slice.Len())
-	// 将每个元素添加到 []interface{} 切片中
 	for i := 0; i < slice.Len(); i++ {
 		params["index"] = i
-		vv := ToView(slice.Index(i).Interface(), params)
-		data = append(data, vv)
+		row := slice.Index(i).Interface()
+		params["row"] = row // 当前整行传入 Format
+		data = append(data, ToView(row, params))
 	}
 	return data
 }
 
+// 将单行结构体转为 map[string]interface{}
 func ToView(v interface{}, params map[string]interface{}) map[string]interface{} {
 	m := make(map[string]interface{})
 	if v == nil {
 		return m
 	}
+
 	fields := getCached(v)
+	if fields == nil {
+		return m
+	}
+
 	value := reflect.ValueOf(v)
 	if value.Kind() == reflect.Ptr {
 		value = value.Elem()
 	}
+
+	if params == nil {
+		params = make(map[string]interface{})
+	}
+	params["row"] = v
+
 	for _, field := range fields {
-		f := Get(field.Func.Type)
-		args := field.Func.Args
+		f := Get(field.Func.Type) // 获取对应格式化器
 		val := value.Field(field.Index).Interface()
-		key := field.Name
-		m[key] = f.Format(val, params, args...)
+		m[field.Name] = f.Format(val, params, field.Func.Args...)
 	}
 	return m
 }
