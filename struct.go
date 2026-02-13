@@ -152,7 +152,11 @@ func ToView(v interface{}, params map[string]interface{}) map[string]interface{}
 	for _, field := range fields {
 		f := Get(field.Func.Type) // 获取对应格式化器
 		val := value.Field(field.Index).Interface()
-		m[field.Name] = f.Format(val, params, field.Func.Args...)
+		if f == nil {
+			m[field.Name] = val
+		} else {
+			m[field.Name] = f.Format(val, params, field.Func.Args...)
+		}
 	}
 	return m
 }

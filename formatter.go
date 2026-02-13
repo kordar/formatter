@@ -35,7 +35,7 @@ func Get(name string) Formatter {
 	if formatter, ok := container[name]; ok {
 		return formatter
 	} else {
-		return container["str"]
+		return nil
 	}
 }
 
@@ -103,6 +103,9 @@ func (i TimeFormatter) Format(value interface{}, param map[string]interface{}, a
 		layout = cast.ToString(args[0])
 	}
 	t := cast.ToTime(value)
+	if t.IsZero() {
+		return ""
+	}
 	return t.Format(layout)
 }
 
